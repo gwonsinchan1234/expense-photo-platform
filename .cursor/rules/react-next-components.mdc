@@ -1,0 +1,13 @@
+---
+description: React/Next component rules for src/**/*.tsx
+globs: src/**/*.tsx
+alwaysApply: false
+---
+
+# React / Next Component Rules
+
+- Components must be function components.
+- Props types must be declared via `interface` or `type`.
+- Avoid unnecessary `useEffect`; use only when required.
+- Keep UI structure; change only logic.
+- Do not rearrange JSX structure.

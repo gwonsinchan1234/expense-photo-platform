@@ -1,3 +1,5 @@
+export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import path from "path";
@@ -38,11 +40,9 @@ type PhotoRow = {
   storage_path: string;
 };
 
-/**
- * ✅ 핵심: 여기서는 "타입 충돌 회피"가 목적이라, 이미지 버퍼 타입을 any로 끊습니다.
- * 런타임은 Buffer로 정상 동작합니다.
- */
-async function fetchImageBuffer(storagePath: string): Promise<{ buf: any; ext: "png" | "jpeg" }> {
+async function fetchImageBuffer(
+  storagePath: string
+): Promise<{ buf: Buffer; ext: "png" | "jpeg" }> {
   const { data: signed, error } = await supabaseAdmin.storage
     .from(BUCKET)
     .createSignedUrl(storagePath, 60 * 10);
@@ -56,27 +56,29 @@ async function fetchImageBuffer(storagePath: string): Promise<{ buf: any; ext: "
   const buf = Buffer.from(arrayBuf) as any;
 
   const lower = storagePath.toLowerCase();
-  const ext =
-    lower.endsWith(".png")
-      ? "png"
-      : lower.endsWith(".jpg") || lower.endsWith(".jpeg")
-      ? "jpeg"
-      : "jpeg";
+  const ext: "png" | "jpeg" =
+    lower.endsWith(".png") ? "png" : lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? "jpeg" : "jpeg";
 
   return { buf, ext };
 }
 
+/**
+ * ✅ [핵심 타입 안정화]
+ * - ExcelJS 타입 정의의 Image.buffer는 Buffer(비제네릭)로 되어있는 경우가 많고,
+ *   TS/Node 버전에서는 Buffer가 Buffer<T> 제네릭으로 잡히면서 타입 충돌이 납니다.
+ * - 런타임은 문제 없으므로, addImage에 들어가는 buffer만 any 캐스팅으로 단일화합니다.
+ */
 function addImageToRange(
   workbook: ExcelJS.Workbook,
   worksheet: ExcelJS.Worksheet,
-  imageBuf: any,
+  imageBuf: unknown,
   ext: "png" | "jpeg",
   range: string
 ) {
-  // ExcelJS는 Node Buffer를 기대 (런타임 OK)
-  const imageId = workbook.addImage({ buffer: imageBuf as any, extension: ext as any } as any);
+  const imageId = workbook.addImage({ buffer: imageBuf as any, extension: ext });
   worksheet.addImage(imageId, range);
 }
+
 
 /**
  * ExcelJS는 “시트 완전 복제” API가 없어서,
@@ -102,8 +104,6 @@ function cloneWorksheetLikeTemplate(
     row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
       const targetCell = targetRow.getCell(colNumber);
       targetCell.value = cell.value;
-
-      // style 객체는 얕은 복사
       targetCell.style = { ...cell.style };
     });
 
@@ -130,7 +130,9 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const docId = searchParams.get("docId");
-    if (!docId) return NextResponse.json({ error: "docId required" }, { status: 400 });
+    if (!docId) {
+      return NextResponse.json({ error: "docId required" }, { status: 400 });
+    }
 
     // 1) doc 조회
     const { data: doc, error: docErr } = await supabaseAdmin
@@ -139,7 +141,9 @@ export async function GET(req: Request) {
       .eq("id", docId)
       .single();
 
-    if (docErr) return NextResponse.json({ error: docErr.message }, { status: 500 });
+    if (docErr) {
+      return NextResponse.json({ error: docErr.message }, { status: 500 });
+    }
 
     // 2) items 조회
     const { data: items, error: itemErr } = await supabaseAdmin
@@ -148,7 +152,9 @@ export async function GET(req: Request) {
       .eq("doc_id", docId)
       .order("evidence_no", { ascending: true });
 
-    if (itemErr) return NextResponse.json({ error: itemErr.message }, { status: 500 });
+    if (itemErr) {
+      return NextResponse.json({ error: itemErr.message }, { status: 500 });
+    }
 
     // 3) 템플릿 로드
     const wb = new ExcelJS.Workbook();
@@ -214,7 +220,9 @@ export async function GET(req: Request) {
       const sheetName = `NO.${evNo || "미정"}`;
 
       // 같은 이름 시트 충돌 방지
-      const finalName = wb.getWorksheet(sheetName) ? `${sheetName}_${it.id.slice(0, 6)}` : sheetName;
+      const finalName = wb.getWorksheet(sheetName)
+        ? `${sheetName}_${it.id.slice(0, 6)}`
+        : sheetName;
 
       const photoWs = cloneWorksheetLikeTemplate(wb, photoTemplateWs, finalName);
 
@@ -256,20 +264,21 @@ export async function GET(req: Request) {
     }
 
     // 7) 반환
-    // ✅ 핵심: writeBuffer() 반환 타입이 환경마다 ArrayBufferLike/Uint8Array 등으로 흔들립니다.
-    //        여기서는 typecheck 통과를 위해 "any"로 끊고, Web Response로 그대로 반환합니다.
-    const out = (await wb.xlsx.writeBuffer()) as any;
-
+    const out = await wb.xlsx.writeBuffer();
+    const body = Buffer.isBuffer(out) ? out : Buffer.from(out as any);
     const mime =
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-    return new Response(out as any, {
+    return new NextResponse(body, {
       headers: {
         "Content-Type": mime,
         "Content-Disposition": `attachment; filename="항목별사용내역서_${(doc as any).month_key}.xlsx"`,
       },
     });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message ?? "server error" },
+      { status: 500 }
+    );
   }
 }

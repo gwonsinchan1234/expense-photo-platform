@@ -1,0 +1,10 @@
+---
+description: Git commit message rules
+alwaysApply: true
+---
+
+# Commit Message Rules
+
+- Commit messages must be in Korean.
+- Format: `[수정]` / `[버그]` / `[기능]`
+- One commit equals one purpose.

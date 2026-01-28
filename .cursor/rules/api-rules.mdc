@@ -1,0 +1,17 @@
+---
+description: API route rules for Next.js route.ts
+globs: src/app/api/**/route.ts
+alwaysApply: false
+---
+
+# API Route Rules
+
+- Split logic clearly by HTTP method (GET/POST/PUT/DELETE).
+- Do not skip request validation; check required fields.
+- Wrap Supabase calls in try/catch and return the error message as-is.
+- Expose API errors as `error.code` / `error.message` without change.
+- Never swallow errors in `catch`.
+- Do not change success/error response shapes.
+- Return JSON responses only via `NextResponse.json`.
+- Do not leave console logs.
+- Do not change existing API signatures.

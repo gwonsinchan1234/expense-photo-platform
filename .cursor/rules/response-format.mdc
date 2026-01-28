@@ -1,0 +1,10 @@
+---
+description: Response format rules
+alwaysApply: true
+---
+
+# Response Format (Speed Priority)
+
+- Before modifying, summarize impact scope in one line.
+- Output final results in file units.
+- If uncertain, do not modify and ask questions instead.

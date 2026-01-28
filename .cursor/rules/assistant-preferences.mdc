@@ -1,0 +1,17 @@
+---
+description: Personal AI working preferences for this repo
+alwaysApply: true
+---
+
+# Working Style
+
+- Make minimal, targeted changes that satisfy the request.
+- Explain changes in detail and include rationale.
+- Prefer editing existing code over large refactors.
+- Keep modifications localized; avoid unrelated cleanup.
+
+# Safety and Clarity
+
+- If a change affects behavior, call it out explicitly.
+- Highlight any assumptions made while implementing.
+- Suggest tests to run when relevant.
