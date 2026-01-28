@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import path from "path";
+import { Buffer } from "node:buffer"; // ✅ 명시(타입/런타임 일치)
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 /**
@@ -36,6 +37,11 @@ type PhotoRow = {
   slot: number;
   storage_path: string;
 };
+
+/** ✅ Response body용: Node Buffer(=Uint8Array) → ArrayBuffer 변환 */
+function bufferToArrayBuffer(buf: Uint8Array) {
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+}
 
 async function fetchImageBuffer(storagePath: string) {
   const { data: signed, error } = await supabaseAdmin.storage
@@ -192,7 +198,6 @@ export async function GET(req: Request) {
     const photoTemplateWs = wb.getWorksheet(PHOTO_SHEET_NAME);
 
     if (!photoTemplateWs) {
-      // 시트명이 다르면 여기로 들어옵니다.
       return NextResponse.json(
         { error: `사진대지 시트를 찾을 수 없습니다. 시트명 확인 필요: ${PHOTO_SHEET_NAME}` },
         { status: 500 }
@@ -251,17 +256,13 @@ export async function GET(req: Request) {
         const { buf, ext } = await fetchImageBuffer(install3.storage_path);
         addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.install3);
       }
-
-      // (선택) 텍스트 주입은 템플릿 셀 주소가 필요합니다.
-      // 아래는 예시이므로 실제 셀 주소로 바꿔야 합니다.
-      // photoWs.getCell("A4").value = `NO.${it.evidence_no ?? ""}`;
-      // photoWs.getCell("B22").value = it.used_at ?? "";
-      // photoWs.getCell("B23").value = `${it.item_name ?? ""} [${it.qty ?? ""}EA]`;
     }
 
-    // 7) 반환
-    const buffer = await wb.xlsx.writeBuffer();
-    return new NextResponse(buffer, {
+    // 7) 반환 (✅ Buffer -> ArrayBuffer로 변환해서 NextResponse에 전달)
+    const out = await wb.xlsx.writeBuffer();
+    const arrayBuffer = bufferToArrayBuffer(out as unknown as Uint8Array);
+
+    return new NextResponse(arrayBuffer, {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="항목별사용내역서_${(doc as any).month_key}.xlsx"`,
