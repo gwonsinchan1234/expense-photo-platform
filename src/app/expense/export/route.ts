@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import path from "path";
-import { Buffer } from "node:buffer"; // ✅ 명시(타입/런타임 일치)
+import { Buffer } from "node:buffer";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 /**
@@ -20,7 +20,7 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 // ✅ 버킷명(사용자 확인 완료)
 const BUCKET = "expense-evidence";
 
-// ✅ 시트명(사용자 확인 완료) - 기존에 끝에 ')' 들어간 오타 제거
+// ✅ 시트명(사용자 확인 완료)
 const PHOTO_SHEET_NAME = "2.안전시설물 사진대지";
 
 // ✅ 템플릿의 사진 칸 범위(예시). 필요 시 템플릿 셀 주소로 조정
@@ -37,11 +37,6 @@ type PhotoRow = {
   slot: number;
   storage_path: string;
 };
-
-/** ✅ Response body용: Node Buffer(=Uint8Array) → ArrayBuffer 변환 */
-function bufferToArrayBuffer(buf: Uint8Array) {
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-}
 
 async function fetchImageBuffer(storagePath: string) {
   const { data: signed, error } = await supabaseAdmin.storage
@@ -196,7 +191,6 @@ export async function GET(req: Request) {
 
     // 5) 사진대지: 템플릿 시트 찾기
     const photoTemplateWs = wb.getWorksheet(PHOTO_SHEET_NAME);
-
     if (!photoTemplateWs) {
       return NextResponse.json(
         { error: `사진대지 시트를 찾을 수 없습니다. 시트명 확인 필요: ${PHOTO_SHEET_NAME}` },
@@ -213,13 +207,10 @@ export async function GET(req: Request) {
     for (const it of itemList) {
       const evNo = it.evidence_no ?? "";
       const sheetName = `NO.${evNo || "미정"}`;
-
-      // 같은 이름 시트 충돌 방지
       const finalName = wb.getWorksheet(sheetName) ? `${sheetName}_${it.id.slice(0, 6)}` : sheetName;
 
       const photoWs = cloneWorksheetLikeTemplate(wb, photoTemplateWs, finalName);
 
-      // 해당 item의 사진 메타 조회
       const { data: photos, error: pErr } = await supabaseAdmin
         .from("expense_item_photos")
         .select("kind, slot, storage_path")
@@ -235,7 +226,6 @@ export async function GET(req: Request) {
       const install2 = list.find((p) => p.kind === "issue_install" && p.slot === 2) ?? null;
       const install3 = list.find((p) => p.kind === "issue_install" && p.slot === 3) ?? null;
 
-      // 사진 삽입
       if (inbound) {
         const { buf, ext } = await fetchImageBuffer(inbound.storage_path);
         addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.inbound);
@@ -258,11 +248,13 @@ export async function GET(req: Request) {
       }
     }
 
-    // 7) 반환 (✅ Buffer -> ArrayBuffer로 변환해서 NextResponse에 전달)
-    const out = await wb.xlsx.writeBuffer();
-    const arrayBuffer = bufferToArrayBuffer(out as unknown as Uint8Array);
+    // 7) 반환
+    // ✅ 핵심: NextResponse Body에는 ArrayBuffer/SharedArrayBuffer가 섞이면 타입이 깨질 수 있으므로
+    //        "무조건 Uint8Array"로 만들어서 전달합니다.
+    const out = (await wb.xlsx.writeBuffer()) as unknown as Uint8Array | ArrayBuffer;
+    const bytes = out instanceof Uint8Array ? out : new Uint8Array(out);
 
-    return new NextResponse(arrayBuffer, {
+    return new NextResponse(bytes, {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="항목별사용내역서_${(doc as any).month_key}.xlsx"`,
