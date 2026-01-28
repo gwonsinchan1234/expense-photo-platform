@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import ItemCombobox, { ExpenseItem } from "@/components/ItemCombobox";
 import PhotoSection from "@/components/PhotoSection";
@@ -37,7 +37,7 @@ export default function PhotosTestPage() {
   // StrictMode 2회 방지
   const lastLoadedDocIdRef = useRef<string | null>(null);
 
-  async function loadDocs() {
+  const loadDocs = useCallback(async () => {
     setLoadingDocs(true);
     setErrorMsg(null);
     try {
@@ -51,15 +51,15 @@ export default function PhotosTestPage() {
       const nextDocs = (data ?? []) as ExpenseDoc[];
       setDocs(nextDocs);
 
-      if (!selectedDocId && nextDocs.length > 0) {
-        setSelectedDocId(nextDocs[0].id);
+      if (nextDocs.length > 0) {
+        setSelectedDocId((prev) => prev ?? nextDocs[0].id);
       }
     } catch (e: any) {
       setErrorMsg(e?.message ?? "문서 로드 실패");
     } finally {
       setLoadingDocs(false);
     }
-  }
+  }, []);
 
   async function loadItems(docId: string) {
     setLoadingItems(true);
@@ -90,8 +90,7 @@ export default function PhotosTestPage() {
 
   useEffect(() => {
     void loadDocs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadDocs]);
 
   useEffect(() => {
     if (!selectedDocId) return;
@@ -100,7 +99,6 @@ export default function PhotosTestPage() {
     lastLoadedDocIdRef.current = selectedDocId;
 
     void loadItems(selectedDocId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDocId]);
 
   return (

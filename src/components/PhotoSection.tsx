@@ -198,7 +198,6 @@ export default function PhotoSection({ docId, itemId }: { docId: string; itemId:
 
         <div style={{ width: "100%", height: 160, background: "#0d0d0d", display: "flex", alignItems: "center", justifyContent: "center" }}>
           {s.url ? (
-            // eslint-disable-next-line @next/next/no-img-element
             <img src={s.url} alt={s.name ?? "preview"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           ) : (
             <span style={{ fontSize: 12, opacity: 0.6 }}>미리보기 없음</span>
