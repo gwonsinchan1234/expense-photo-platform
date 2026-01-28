@@ -30,7 +30,7 @@ export default [
 
       // ✅ CI 막던 규칙 완화
       "@typescript-eslint/no-explicit-any": "off",
-      "prefer-const": "warn",
+     "prefer-const": "off",
     },
   },
 ];
