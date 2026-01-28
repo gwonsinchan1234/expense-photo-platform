@@ -1,123 +1,157 @@
-// app/api/photos/upload/route.ts
-// [이유] 사진 업로드를 서버(API)에서 통제(슬롯/개수 제한, 교체, Storage+DB 동기화)하기 위함
-
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-export const runtime = "nodejs"; // [이유] 파일 처리 안정성
+export const runtime = "nodejs";
 
-type PhotoKind = "inbound" | "issue_install";
+const BUCKET = "expense-photos";
+const MAX_BYTES = 10 * 1024 * 1024;
+const SIGNED_TTL = 60 * 60; // 1시간
 
-export async function POST(req: Request) {
+type Kind = "inbound" | "install";
+
+function bad(message: string, status = 400) {
+  return NextResponse.json({ ok: false, message }, { status });
+}
+
+function parseKind(v: string): Kind | null {
+  if (v === "inbound" || v === "install") return v;
+  return null;
+}
+
+async function makeSignedUrl(storagePath: string) {
+  const { data, error } = await supabaseAdmin.storage
+    .from(BUCKET)
+    .createSignedUrl(storagePath, SIGNED_TTL);
+
+  if (error) throw new Error(`SignedUrl 생성 실패: ${error.message}`);
+  return data.signedUrl;
+}
+
+/**
+ * GET /api/photos/upload?docId=...&itemId=...
+ * - DB에서 해당 item의 사진 목록 조회
+ * - 각 storage_path에 대해 signedUrl 생성해서 반환
+ */
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const docId = String(searchParams.get("docId") || "").trim();
+    const itemId = String(searchParams.get("itemId") || "").trim();
+
+    if (!docId) return bad("docId 누락");
+    if (!itemId) return bad("itemId 누락");
+
+    const { data, error } = await supabaseAdmin
+      .from("expense_item_photos")
+      .select("id, kind, slot_index, storage_path, updated_at")
+      .eq("doc_id", docId)
+      .eq("item_id", itemId);
+
+    if (error) return bad(`DB 조회 실패: ${error.message}`, 500);
+
+    const rows = (data ?? []) as Array<{
+      id: string;
+      kind: Kind;
+      slot_index: number;
+      storage_path: string;
+      updated_at: string;
+    }>;
+
+    // signedUrl 생성
+    const withUrls = await Promise.all(
+      rows.map(async (r) => {
+        const signedUrl = await makeSignedUrl(r.storage_path);
+        return { ...r, signedUrl };
+      })
+    );
+
+    return NextResponse.json({ ok: true, rows: withUrls });
+  } catch (e: any) {
+    return bad(`서버 오류(GET): ${e?.message ?? "unknown"}`, 500);
+  }
+}
+
+/**
+ * POST /api/photos/upload
+ * - 업로드 + DB upsert
+ * - 업로드 직후 해당 파일 signedUrl 반환(미리보기용)
+ */
+export async function POST(req: NextRequest) {
   try {
     const form = await req.formData();
 
-    // 프론트에서 보내는 키 이름을 그대로 사용
-    const expenseItemId = String(form.get("expenseItemId") || "");
-    const kindRaw = String(form.get("kind") || ""); // inbound | issue_install
-    const slotRaw = String(form.get("slot") ?? "");
-    const file = form.get("file") as File | null;
+    const docId = String(form.get("docId") || "").trim();
+    const itemId = String(form.get("itemId") || "").trim();
+    const kindRaw = String(form.get("kind") || "").trim();
+    const slotIndexRaw = String(form.get("slotIndex") || "").trim();
+    const file = form.get("file");
 
-    // 1) 필수값 검사
-    if (!expenseItemId || !kindRaw || !slotRaw || !file) {
-      return NextResponse.json({ ok: false, error: "필수값 누락" }, { status: 400 });
-    }
+    if (!docId) return bad("docId 누락");
+    if (!itemId) return bad("itemId 누락");
 
-    const kind = kindRaw as PhotoKind;
-    const slot = Number(slotRaw);
+    const kind = parseKind(kindRaw);
+    if (!kind) return bad("kind 값 오류(inbound|install)");
 
-    // 2) 입력값 유효성(서버 강제)
-    if (!["inbound", "issue_install"].includes(kind)) {
-      return NextResponse.json({ ok: false, error: "kind 오류" }, { status: 400 });
-    }
+    if (!slotIndexRaw) return bad("slotIndex 누락");
+    const slotIndex = Number(slotIndexRaw);
+    if (!Number.isInteger(slotIndex)) return bad("slotIndex 정수 아님");
 
-    if (!Number.isFinite(slot) || slot < 0 || slot > 3) {
-      return NextResponse.json({ ok: false, error: "slot 범위 오류(0~3)" }, { status: 400 });
-    }
+    if (!(file instanceof File)) return bad("file 누락");
 
-    if (kind === "inbound" && slot !== 0) {
-      return NextResponse.json({ ok: false, error: "반입은 slot=0만 허용" }, { status: 400 });
-    }
-
-    if (!file.type.startsWith("image/")) {
-      return NextResponse.json({ ok: false, error: "이미지 파일만 허용" }, { status: 400 });
-    }
-
-    // 3) 기존 슬롯 사진 존재 여부(교체 목적)
-    const { data: existing, error: exErr } = await supabaseAdmin
-      .from("expense_item_photos")
-      .select("id, storage_path")
-      .eq("expense_item_id", expenseItemId)
-      .eq("kind", kind)
-      .eq("slot", slot)
-      .maybeSingle();
-
-    if (exErr) throw exErr;
-
-    // 4) issue_install은 최대 4장: "신규 추가"만 차단(교체는 허용)
-    if (kind === "issue_install" && !existing?.id) {
-      const { count, error: countErr } = await supabaseAdmin
-        .from("expense_item_photos")
-        .select("*", { count: "exact", head: true })
-        .eq("expense_item_id", expenseItemId)
-        .eq("kind", "issue_install");
-
-      if (countErr) throw countErr;
-
-      if ((count ?? 0) >= 4) {
-        return NextResponse.json({ ok: false, error: "지급·설치 사진은 최대 4장" }, { status: 400 });
-      }
-    }
-
-    // 5) Storage 경로(슬롯 고정: 같은 슬롯은 항상 같은 파일로 교체)
-    const safeName = file.name.replaceAll(" ", "_");
-    const ext = safeName.includes(".") ? (safeName.split(".").pop() || "jpg") : "jpg";
-    const safeExt = ext.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "jpg";
-    const path = `expense_items/${expenseItemId}/${kind}/${slot}.${safeExt}`;
-
-    // 6) Storage 업로드(upsert=true로 같은 슬롯 교체)
-    const buf = Buffer.from(await file.arrayBuffer());
-
-    const { error: upErr } = await supabaseAdmin.storage
-      .from("expense-evidence") // ✅ 버킷명 통일(치명 오류 방지)
-      .upload(path, buf, {
-        upsert: true, // [이유] 같은 슬롯은 교체(덮어쓰기)
-        contentType: file.type,
-      });
-
-    if (upErr) throw upErr;
-
-    // 7) DB 메타 저장(기존 있으면 update, 없으면 insert)
-    const payload = {
-      expense_item_id: expenseItemId,
-      kind,
-      slot,
-      storage_path: path,
-      original_name: file.name,
-      mime_type: file.type,
-      size_bytes: file.size,
-    };
-
-    let dbRes;
-    if (existing?.id) {
-      dbRes = await supabaseAdmin
-        .from("expense_item_photos")
-        .update(payload)
-        .eq("id", existing.id)
-        .select("*")
-        .single();
+    // ✅ 슬롯 규칙(서버 강제)
+    if (kind === "inbound") {
+      if (slotIndex !== 0) return bad("반입(inbound)은 slotIndex=0만 허용");
     } else {
-      dbRes = await supabaseAdmin
-        .from("expense_item_photos")
-        .insert(payload)
-        .select("*")
-        .single();
+      if (slotIndex < 0 || slotIndex > 3) return bad("지급·설치(install)은 slotIndex 0~3만 허용");
     }
 
-    if (dbRes.error) throw dbRes.error;
+    const arrayBuf = await file.arrayBuffer();
+    if (arrayBuf.byteLength > MAX_BYTES) return bad(`파일 용량 초과(최대 ${MAX_BYTES} bytes)`);
 
-    return NextResponse.json({ ok: true, photo: dbRes.data });
+    const contentType = file.type || "application/octet-stream";
+    const ext =
+      contentType.includes("png") ? "png" :
+      contentType.includes("jpeg") ? "jpg" :
+      contentType.includes("webp") ? "webp" :
+      "bin";
+
+    // 같은 슬롯은 같은 경로 -> upsert 덮어쓰기
+    const storagePath = `docs/${docId}/items/${itemId}/${kind}/slot-${slotIndex}.${ext}`;
+
+    const { error: uploadErr } = await supabaseAdmin.storage
+      .from(BUCKET)
+      .upload(storagePath, arrayBuf, { contentType, upsert: true });
+
+    if (uploadErr) return bad(`Storage 업로드 실패: ${uploadErr.message}`, 500);
+
+    const { error: dbErr } = await supabaseAdmin
+      .from("expense_item_photos")
+      .upsert(
+        {
+          doc_id: docId,
+          item_id: itemId,
+          kind,
+          slot_index: slotIndex,
+          storage_path: storagePath,
+        },
+        { onConflict: "item_id,kind,slot_index" }
+      );
+
+    if (dbErr) return bad(`DB 저장 실패: ${dbErr.message}`, 500);
+
+    // ✅ 업로드 직후 미리보기는 signedUrl로 반환(버킷 private여도 OK)
+    const signedUrl = await makeSignedUrl(storagePath);
+
+    return NextResponse.json({
+      ok: true,
+      docId,
+      itemId,
+      kind,
+      slotIndex,
+      storagePath,
+      signedUrl,
+    });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? "서버 오류" }, { status: 500 });
+    return bad(`서버 처리 중 오류(POST): ${e?.message ?? "unknown"}`, 500);
   }
 }

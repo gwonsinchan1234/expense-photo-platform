@@ -1,10 +1,20 @@
-// lib/supabaseAdmin.ts
-// [이유] 서버(API)에서만 Service Role로 Storage/DB를 강제 통제하기 위함
-
 import { createClient } from "@supabase/supabase-js";
 
-export const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,     // [이유] 프로젝트 URL
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,    // [이유] 서버에서만 강한 권한
-  { auth: { persistSession: false } }
-);
+/**
+ * [목표]
+ * - Next.js 서버(route.ts) 전용 Admin 클라이언트
+ * - 서비스 롤 키 사용(프론트 노출 금지)
+ */
+
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL 누락(.env.local 확인)");
+if (!serviceKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY 누락(.env.local 확인)");
+
+export const supabaseAdmin = createClient(url, serviceKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+});

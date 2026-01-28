@@ -1,128 +1,133 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabaseClient";
+import PhotoSection from "@/components/PhotoSection";
 
-/**
- * [1단계 목표]
- * - 사진 선택 즉시 화면에 썸네일 미리보기
- * - 지급/설치 사진: 최대 4장 제한
- * - "초과 업로드"는 프론트에서 즉시 차단
- *
- * [주의]
- * - 아직 Supabase 업로드/DB 저장은 하지 않습니다.
- * - 다음 단계에서 반입사진 1장(교체만) / 지급·설치 4분할(최대4장)로 나눕니다.
- */
+const ITEM_TABLE = "expense_items";
 
-export default function Page() {
-  const MAX = 4;
+type ExpenseItemLite = {
+  id: string;
+  item_name: string;
+};
 
-  const [files, setFiles] = useState<File[]>([]);
+export default function ExpensePage() {
+  const [items, setItems] = useState<ExpenseItemLite[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<string>("");
 
-  // 브라우저 메모리 누수 방지: URL은 useMemo로 만들고, 파일 변경 시 재생성
-  const previews = useMemo(() => {
-    return files.map((f) => ({
-      name: f.name,
-      url: URL.createObjectURL(f),
-    }));
-  }, [files]);
+  const [docId, setDocId] = useState<string>("");
+  const [loadingDoc, setLoadingDoc] = useState<boolean>(false);
 
-  const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const list = e.target.files;
-    if (!list) return;
+  // 1) 목록 로드 + "첫 번째 id" 확인용
+  useEffect(() => {
+    const load = async () => {
+      const { data, error } = await supabase
+        .from(ITEM_TABLE)
+        .select("id, item_name")
+        .order("created_at", { ascending: true })
+        .limit(50);
 
-    const selected = Array.from(list);
+      console.log("[LIST] error:", error?.message ?? null);
+      console.log("[LIST] count:", (data as any[])?.length ?? 0);
+      console.log("[LIST] first row:", (data as any[])?.[0] ?? null);
 
-    // 남은 슬롯 계산
-    const remain = MAX - files.length;
+      if (error) return;
+      setItems((data as ExpenseItemLite[]) ?? []);
+    };
 
-    if (selected.length > remain) {
-      alert(`지급/설치 사진은 최대 ${MAX}장입니다. (현재 ${files.length}장, 추가 가능 ${remain}장)`);
-      e.target.value = ""; // 같은 파일 다시 선택 가능하게 초기화
-      return;
-    }
+    load();
+  }, []);
 
-    setFiles((prev) => [...prev, ...selected]);
-    e.target.value = "";
-  };
+  // 2) 선택된 ID로 실제 row가 있는지 2단계 확인(진단)
+  useEffect(() => {
+    const run = async () => {
+      if (!selectedItemId) {
+        setDocId("");
+        return;
+      }
 
-  const onClearAll = () => {
-    setFiles([]);
-  };
+      setLoadingDoc(true);
+      setDocId("");
+
+      console.log("[PICK] selectedItemId:", selectedItemId);
+
+      // (A) id 존재 여부(최소 조회)
+      const exist = await supabase
+        .from(ITEM_TABLE)
+        .select("id")
+        .eq("id", selectedItemId)
+        .maybeSingle();
+
+      console.log("[EXIST] error:", exist.error?.message ?? null);
+      console.log("[EXIST] data:", exist.data ?? null);
+
+      // (B) doc_id 조회
+      const q = await supabase
+        .from(ITEM_TABLE)
+        .select("doc_id")
+        .eq("id", selectedItemId)
+        .maybeSingle();
+
+      setLoadingDoc(false);
+
+      console.log("[DOC] error:", q.error?.message ?? null);
+      console.log("[DOC] data:", q.data ?? null);
+
+      if (q.error) return;
+
+      // doc_id가 null이면 그대로 null -> docId 없음이 정상
+      setDocId((q.data as any)?.doc_id ?? "");
+    };
+
+    run();
+  }, [selectedItemId]);
 
   return (
-    <main style={{ padding: 16, maxWidth: 480, margin: "0 auto" }}>
-      <div style={{ color: "yellow", fontWeight: 800 }}>PHOTOSECTION TEST 123</div>
+    <main style={{ padding: 16, display: "grid", gap: 16 }}>
+      <h2>안전관리비 사진 업로드</h2>
 
-      <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
-        1단계: 사진 썸네일 미리보기 (최대 4장)
-      </h2>
+      <div style={{ display: "grid", gap: 8 }}>
+        <label style={{ fontWeight: 600 }}>품목 선택</label>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <label
-          style={{
-            display: "inline-block",
-            padding: "10px 12px",
-            borderRadius: 8,
-            border: "1px solid #444",
-            cursor: "pointer",
-          }}
+        <select
+          value={selectedItemId}
+          onChange={(e) => setSelectedItemId(e.target.value)}
+          style={{ padding: 10, borderRadius: 8 }}
         >
-          사진 선택
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={onPick}
-            style={{ display: "none" }}
-          />
-        </label>
-
-        <button
-          onClick={onClearAll}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 8,
-            border: "1px solid #444",
-            cursor: "pointer",
-            background: "transparent",
-          }}
-        >
-          전체 삭제
-        </button>
+          <option value="">-- 품목을 선택하세요 --</option>
+          {items.map((it) => (
+            <option key={it.id} value={it.id}>
+              {it.item_name}
+            </option>
+          ))}
+        </select>
       </div>
 
-      <div style={{ marginBottom: 10, fontSize: 13 }}>
-        현재 {files.length} / {MAX}장
-      </div>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 8,
-        }}
-      >
-        {previews.map((p, idx) => (
-          <div
-            key={idx}
-            style={{
-              border: "1px solid #333",
-              borderRadius: 10,
-              overflow: "hidden",
-              background: "#111",
-            }}
-          >
-            <img
-              src={p.url}
-              alt={p.name}
-              style={{ width: "100%", height: 160, objectFit: "cover" }}
-            />
-            <div style={{ fontSize: 11, padding: 6, opacity: 0.8 }}>
-              {p.name}
-            </div>
+      {selectedItemId && (
+        <div style={{ padding: 12, border: "1px solid #444", borderRadius: 8 }}>
+          <div style={{ fontSize: 12, opacity: 0.85 }}>itemId: {selectedItemId}</div>
+          <div style={{ fontSize: 12, opacity: 0.85 }}>
+            docId: {loadingDoc ? "조회중..." : docId ? docId : "(비어있음)"}
           </div>
-        ))}
-      </div>
+          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
+            콘솔(F12)에서 [EXIST]/[DOC] 로그를 확인하세요.
+          </div>
+        </div>
+      )}
+
+      {selectedItemId && docId && <PhotoSection docId={docId} itemId={selectedItemId} />}
+
+      {selectedItemId && !loadingDoc && !docId && (
+        <div style={{ padding: 12, border: "1px solid #f00", borderRadius: 8 }}>
+          docId가 비어있습니다. 아래 원인 중 하나입니다.
+          <br />
+          1) 선택된 ID가 expense_items.id가 아님(다른 테이블의 id를 넘김)
+          <br />
+          2) expense_items의 doc_id 값이 실제로 NULL
+          <br />
+          3) RLS/권한으로 select가 막힘(콘솔에 error 메시지 표시됨)
+        </div>
+      )}
     </main>
   );
 }

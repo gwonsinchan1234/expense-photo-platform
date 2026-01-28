@@ -1,197 +1,236 @@
 "use client";
 
-/**
- * ExpensePage
- * - 문서 / 품목 관리
- * - 선택된 item.id(UUID)를 기준으로 사진 업로드
- */
+export const dynamic = "force-dynamic";
 
-import { useEffect, useState } from "react";
-import * as XLSX from "xlsx";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import PhotoSection from "@/components/PhotoSection";
 
+/**
+ * [기능]
+ * - 품목 리스트 로딩
+ * - 타이핑으로 검색(자동완성)
+ * - 클릭 또는 Enter로 품목 선택
+ * - 선택된 itemId로 doc_id 단건 조회
+ * - docId + itemId로 PhotoSection 렌더링
+ *
+ * [주의]
+ * - CSS는 나중에. 지금은 기능만 안정화
+ */
 
+const ITEM_TABLE = "expense_items";
 
-
-
-
-type ExpenseDoc = {
+type ExpenseItemLite = {
   id: string;
-  site_name: string;
-  month_key: string;
-};
-
-type ExpenseItem = {
-  id: string;
-  doc_id: string;
-  evidence_no: number;
   item_name: string;
-  qty: number;
-  unit_price: number | null;
-  amount: number | null;
-  used_at: string | null;
-  source_fingerprint?: string | null;
-  source_row_no?: number | null;
 };
 
 export default function ExpensePage() {
-  const [doc, setDoc] = useState<ExpenseDoc | null>(null);
-  const [items, setItems] = useState<ExpenseItem[]>([]);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [items, setItems] = useState<ExpenseItemLite[]>([]);
+  const [loadingItems, setLoadingItems] = useState(false);
 
-  const [siteName, setSiteName] = useState("테스트현장");
-  const [monthKey, setMonthKey] = useState("2026-01");
+  const [query, setQuery] = useState(""); // 타이핑 입력값
+  const [open, setOpen] = useState(false); // 자동완성 목록 열림/닫힘
+  const [activeIndex, setActiveIndex] = useState(0); // 키보드 선택 인덱스
 
-  const [evidenceNo, setEvidenceNo] = useState<number>(1);
-  const [itemName, setItemName] = useState("위험테이프");
-  const [qty, setQty] = useState<number>(10);
+  const [selectedItem, setSelectedItem] = useState<ExpenseItemLite | null>(null);
 
-  /** 최근 문서 로드 */
-  const loadLatestDoc = async () => {
-    const { data, error } = await supabase
-      .from("expense_docs")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  const [docId, setDocId] = useState<string>("");
+  const [loadingDoc, setLoadingDoc] = useState<boolean>(false);
 
-    if (error) {
-      alert(`doc 조회 에러: ${error.message}`);
-      return;
-    }
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
-    setDoc((data as ExpenseDoc) ?? null);
-  };
-
-  /** 품목 로드 */
-  const loadItems = async (docId: string) => {
-    const { data, error } = await supabase
-      .from("expense_items")
-      .select("*")
-      .eq("doc_id", docId)
-      .order("evidence_no", { ascending: true });
-
-    if (error) {
-      alert(`items 조회 에러: ${error.message}`);
-      return;
-    }
-
-    setItems((data ?? []) as ExpenseItem[]);
-  };
-
+  // 1) 품목 로딩
   useEffect(() => {
-    loadLatestDoc();
+    const load = async () => {
+      setLoadingItems(true);
+
+      const { data, error } = await supabase
+        .from(ITEM_TABLE)
+        .select("id, item_name")
+        .order("created_at", { ascending: true })
+        .limit(500);
+
+      setLoadingItems(false);
+
+      if (error) {
+        console.error("품목 목록 조회 실패:", error.message);
+        return;
+      }
+
+      setItems((data as ExpenseItemLite[]) ?? []);
+    };
+
+    load();
   }, []);
 
+  // 2) 검색 결과(타이핑 필터)
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items.slice(0, 20);
+
+    // 포함 검색(초기 버전). 나중에 초성검색 등 고도화 가능
+    const list = items.filter((it) => it.item_name.toLowerCase().includes(q));
+    return list.slice(0, 20);
+  }, [items, query]);
+
+  // 3) 선택 -> doc_id 단건 조회
   useEffect(() => {
-    if (doc?.id) loadItems(doc.id);
-  }, [doc?.id]);
+    const run = async () => {
+      if (!selectedItem?.id) {
+        setDocId("");
+        return;
+      }
 
-  /** 문서 생성 */
-  const createDoc = async () => {
-    const { data, error } = await supabase
-      .from("expense_docs")
-      .insert([{ site_name: siteName, month_key: monthKey }])
-      .select()
-      .single();
+      setLoadingDoc(true);
+      setDocId("");
 
-    if (error) {
-      alert(`doc 생성 에러: ${error.message}`);
-      return;
-    }
+      const { data, error } = await supabase
+        .from(ITEM_TABLE)
+        .select("doc_id")
+        .eq("id", selectedItem.id)
+        .maybeSingle();
 
-    setDoc(data as ExpenseDoc);
-    setSelectedItemId(null);
+      setLoadingDoc(false);
+
+      if (error) {
+        console.error("doc_id 조회 실패:", error.message);
+        return;
+      }
+
+      setDocId((data as any)?.doc_id ?? "");
+    };
+
+    run();
+  }, [selectedItem?.id]);
+
+  const pick = (it: ExpenseItemLite) => {
+    setSelectedItem(it);
+    setQuery(it.item_name); // 입력칸에 선택값 반영
+    setOpen(false);
   };
 
-  /** 품목 수동 추가 */
-  const addItem = async () => {
-    if (!doc?.id) {
-      alert("먼저 문서(doc)를 생성/선택하세요.");
+  // 바깥 클릭하면 닫기
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const el = wrapRef.current;
+      if (!el) return;
+      if (!el.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, []);
+
+  // 키보드 조작
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!open) {
+      if (e.key === "ArrowDown") setOpen(true);
       return;
     }
 
-    const { error } = await supabase.from("expense_items").insert([
-      {
-        doc_id: doc.id,
-        evidence_no: evidenceNo,
-        item_name: itemName,
-        qty,
-        unit_price: null,
-        amount: null,
-        used_at: null,
-      },
-    ]);
-
-    if (error) {
-      alert(`item 추가 에러: ${error.message}`);
-      return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((v) => Math.min(v + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((v) => Math.max(v - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const target = filtered[activeIndex];
+      if (target) pick(target);
+    } else if (e.key === "Escape") {
+      setOpen(false);
     }
-
-    await loadItems(doc.id);
-  };
-
-  /** 엑셀 업로드 (기존 로직 그대로 유지) */
-  const importExcelToItems = async (file: File) => {
-    // 👉 당신 코드 그대로 (변경 없음)
   };
 
   return (
-    <main style={{ padding: 16 }}>
-      <h1>안전관리비 관리(1단계: 문서/품목 + 사진)</h1>
+    <main style={{ padding: 16, display: "grid", gap: 16 }}>
+      <h2>안전관리비 사진 업로드</h2>
 
-      {/* 1) 문서 */}
-      <section style={{ marginTop: 16, padding: 12, border: "1px solid #333" }}>
-        <h2>1) 문서(doc) 생성</h2>
+      <div ref={wrapRef} style={{ display: "grid", gap: 8, position: "relative" }}>
+        <label style={{ fontWeight: 700 }}>품목 선택(타이핑 가능)</label>
 
-        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-          <input value={siteName} onChange={(e) => setSiteName(e.target.value)} />
-          <input value={monthKey} onChange={(e) => setMonthKey(e.target.value)} />
-          <button onClick={createDoc}>문서 생성</button>
-          <button onClick={loadLatestDoc}>최근 문서 불러오기</button>
-        </div>
+        <input
+          ref={inputRef}
+          value={query}
+          placeholder={loadingItems ? "불러오는 중..." : "예: 안전화, 위험테이프 ..."}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+            setActiveIndex(0);
+            // 입력을 바꾸면 기존 선택 해제(혼동 방지)
+            setSelectedItem(null);
+            setDocId("");
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+          style={{ padding: 10, borderRadius: 8, border: "1px solid #444", background: "transparent", color: "#fff" }}
+        />
 
-        <div style={{ marginTop: 8 }}>
-          <b>현재 문서:</b>{" "}
-          {doc ? `${doc.site_name} / ${doc.month_key}` : "없음"}
-        </div>
-      </section>
-
-      {/* 3) 품목 리스트 */}
-      <section style={{ marginTop: 16, padding: 12, border: "1px solid #333" }}>
-        <h2>3) 품목 리스트 (행 선택)</h2>
-
-        <ul>
-          {items.map((it) => (
-            <li key={it.id}>
-              <label>
-                <input
-                  type="radio"
-                  checked={selectedItemId === it.id}
-                  onChange={() => setSelectedItemId(it.id)}
-                />
-                <b> NO.{it.evidence_no}</b> / {it.item_name} / 수량 {it.qty}
-              </label>
-            </li>
-          ))}
-        </ul>
-
-        <div>
-          <b>선택된 품목 ID:</b> {selectedItemId ?? "없음"}
-        </div>
-      </section>
-
-      {/* 4) 사진 업로드 */}
-      <section style={{ marginTop: 16, padding: 12, border: "1px solid #333" }}>
-        <h2>4) 사진 업로드</h2>
-
-        {selectedItemId ? (
-          <PhotoSection expenseItemId={selectedItemId} />
-        ) : (
-          <div>먼저 위에서 품목을 선택하세요.</div>
+        {/* 자동완성 목록 */}
+        {open && (
+          <div
+            style={{
+              position: "absolute",
+              top: 72,
+              left: 0,
+              right: 0,
+              border: "1px solid #444",
+              borderRadius: 8,
+              background: "#111",
+              maxHeight: 260,
+              overflow: "auto",
+              zIndex: 50,
+            }}
+          >
+            {filtered.length === 0 ? (
+              <div style={{ padding: 10, fontSize: 13, opacity: 0.8, color: "#fff" }}>검색 결과 없음</div>
+            ) : (
+              filtered.map((it, idx) => (
+                <div
+                  key={it.id}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  onMouseDown={(e) => {
+                    // blur로 닫히기 전에 선택되도록 mousedown 사용
+                    e.preventDefault();
+                    pick(it);
+                  }}
+                  style={{
+                    padding: 10,
+                    cursor: "pointer",
+                    color: "#fff",
+                    background: idx === activeIndex ? "#222" : "transparent",
+                    borderBottom: "1px solid #222",
+                  }}
+                >
+                  {it.item_name}
+                </div>
+              ))
+            )}
+          </div>
         )}
-      </section>
+      </div>
+
+      {/* 상태 표시 */}
+      <div style={{ padding: 12, border: "1px solid #444", borderRadius: 8, color: "#fff" }}>
+        <div style={{ fontSize: 12, opacity: 0.85 }}>
+          itemId: {selectedItem?.id ?? "(미선택)"} / item: {selectedItem?.item_name ?? "(미선택)"}
+        </div>
+        <div style={{ fontSize: 12, opacity: 0.85 }}>
+          docId: {loadingDoc ? "조회중..." : docId ? docId : "(비어있음)"}
+        </div>
+      </div>
+
+      {/* 사진 업로드 */}
+      {selectedItem?.id && docId && <PhotoSection docId={docId} itemId={selectedItem.id} />}
+
+      {/* docId 없음 경고 */}
+      {selectedItem?.id && !loadingDoc && !docId && (
+        <div style={{ padding: 12, border: "1px solid #f00", borderRadius: 8, color: "#fff" }}>
+          docId가 비어있습니다. 해당 item 행의 doc_id가 NULL이거나 조회가 막혔습니다.
+        </div>
+      )}
     </main>
   );
 }
