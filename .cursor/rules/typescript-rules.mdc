@@ -1,0 +1,11 @@
+---
+description: TypeScript safety rules
+alwaysApply: true
+---
+
+# TypeScript Rules (Important)
+
+- No `any`. If unavoidable, add an explicit comment explaining why.
+- Minimize type assertions (`as`).
+- Functions with return values must declare return types.
+- No implicit `any`.

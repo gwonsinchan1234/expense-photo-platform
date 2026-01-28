@@ -1,0 +1,10 @@
+---
+description: File modification scope rules
+alwaysApply: true
+---
+
+# File Modification Scope (Most Important)
+
+- Never modify files other than those the user selected.
+- Do not edit shared utils or config files.
+- If a change is needed outside selected files, ask first.

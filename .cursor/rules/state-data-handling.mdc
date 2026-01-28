@@ -1,0 +1,14 @@
+---
+description: State and data handling rules
+alwaysApply: true
+---
+
+# State / Data Handling Rules
+
+- Use `useState` only for minimal state units.
+- Compute derived values with `useMemo`.
+- Extract async logic into separate functions.
+- Do not skip null/undefined handling.
+- Avoid adding unnecessary re-render triggers.
+- Do not call async functions inside `map`/`filter`.
+- Minimize memory copies for large datasets.
