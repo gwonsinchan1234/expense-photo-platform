@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import path from "path";
-import { Buffer } from "node:buffer";
+import { Blob } from "buffer"; // ✅ BodyInit 호환 확실하게
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 /**
@@ -38,7 +38,7 @@ type PhotoRow = {
   storage_path: string;
 };
 
-async function fetchImageBuffer(storagePath: string) {
+async function fetchImageBytes(storagePath: string) {
   const { data: signed, error } = await supabaseAdmin.storage
     .from(BUCKET)
     .createSignedUrl(storagePath, 60 * 10);
@@ -49,7 +49,7 @@ async function fetchImageBuffer(storagePath: string) {
   if (!res.ok) throw new Error(`이미지 다운로드 실패: ${res.status}`);
 
   const arrayBuf = await res.arrayBuffer();
-  const buf = Buffer.from(arrayBuf);
+  const bytes = new Uint8Array(arrayBuf);
 
   const lower = storagePath.toLowerCase();
   const ext =
@@ -59,17 +59,21 @@ async function fetchImageBuffer(storagePath: string) {
       ? "jpeg"
       : "jpeg";
 
-  return { buf, ext: ext as "png" | "jpeg" };
+  return { bytes, ext: ext as "png" | "jpeg" };
 }
 
 function addImageToRange(
   workbook: ExcelJS.Workbook,
   worksheet: ExcelJS.Worksheet,
-  imageBuf: Buffer,
+  imageBytes: Uint8Array,
   ext: "png" | "jpeg",
   range: string
 ) {
-  const imageId = workbook.addImage({ buffer: imageBuf, extension: ext });
+  // ExcelJS는 buffer를 기대 → Uint8Array를 Buffer로 변환해서 전달(런타임 안전)
+  const imageId = workbook.addImage({
+    buffer: Buffer.from(imageBytes),
+    extension: ext,
+  });
   worksheet.addImage(imageId, range);
 }
 
@@ -207,10 +211,15 @@ export async function GET(req: Request) {
     for (const it of itemList) {
       const evNo = it.evidence_no ?? "";
       const sheetName = `NO.${evNo || "미정"}`;
-      const finalName = wb.getWorksheet(sheetName) ? `${sheetName}_${it.id.slice(0, 6)}` : sheetName;
+
+      // 같은 이름 시트 충돌 방지
+      const finalName = wb.getWorksheet(sheetName)
+        ? `${sheetName}_${it.id.slice(0, 6)}`
+        : sheetName;
 
       const photoWs = cloneWorksheetLikeTemplate(wb, photoTemplateWs, finalName);
 
+      // 해당 item의 사진 메타 조회
       const { data: photos, error: pErr } = await supabaseAdmin
         .from("expense_item_photos")
         .select("kind, slot, storage_path")
@@ -227,36 +236,40 @@ export async function GET(req: Request) {
       const install3 = list.find((p) => p.kind === "issue_install" && p.slot === 3) ?? null;
 
       if (inbound) {
-        const { buf, ext } = await fetchImageBuffer(inbound.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.inbound);
+        const { bytes, ext } = await fetchImageBytes(inbound.storage_path);
+        addImageToRange(wb, photoWs, bytes, ext, PHOTO_RANGES.inbound);
       }
       if (install0) {
-        const { buf, ext } = await fetchImageBuffer(install0.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.install0);
+        const { bytes, ext } = await fetchImageBytes(install0.storage_path);
+        addImageToRange(wb, photoWs, bytes, ext, PHOTO_RANGES.install0);
       }
       if (install1) {
-        const { buf, ext } = await fetchImageBuffer(install1.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.install1);
+        const { bytes, ext } = await fetchImageBytes(install1.storage_path);
+        addImageToRange(wb, photoWs, bytes, ext, PHOTO_RANGES.install1);
       }
       if (install2) {
-        const { buf, ext } = await fetchImageBuffer(install2.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.install2);
+        const { bytes, ext } = await fetchImageBytes(install2.storage_path);
+        addImageToRange(wb, photoWs, bytes, ext, PHOTO_RANGES.install2);
       }
       if (install3) {
-        const { buf, ext } = await fetchImageBuffer(install3.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.install3);
+        const { bytes, ext } = await fetchImageBytes(install3.storage_path);
+        addImageToRange(wb, photoWs, bytes, ext, PHOTO_RANGES.install3);
       }
     }
 
     // 7) 반환
-    // ✅ 핵심: NextResponse Body에는 ArrayBuffer/SharedArrayBuffer가 섞이면 타입이 깨질 수 있으므로
-    //        "무조건 Uint8Array"로 만들어서 전달합니다.
-    const out = (await wb.xlsx.writeBuffer()) as unknown as Uint8Array | ArrayBuffer;
-    const bytes = out instanceof Uint8Array ? out : new Uint8Array(out);
+    // ✅ 핵심: 타입 충돌 방지 위해 "Blob"로 반환 (BodyInit 호환 확실)
+    const outAny = (await wb.xlsx.writeBuffer()) as any;
+    const bytes: Uint8Array =
+      outAny instanceof Uint8Array ? outAny : new Uint8Array(outAny);
 
-    return new NextResponse(bytes, {
+    const mime =
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const blob = new Blob([bytes], { type: mime });
+
+    return new NextResponse(blob, {
       headers: {
-        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Type": mime,
         "Content-Disposition": `attachment; filename="항목별사용내역서_${(doc as any).month_key}.xlsx"`,
       },
     });
