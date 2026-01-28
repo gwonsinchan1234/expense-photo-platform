@@ -177,7 +177,7 @@ export default function PhotoSection({ docId, itemId }: { docId: string; itemId:
   const uploadAllSelected = async () => {
     for (const k of allKeys) {
       if (slots[k].file) {
-        // eslint-disable-next-line no-await-in-loop
+ 
         await uploadOne(k);
       }
     }
