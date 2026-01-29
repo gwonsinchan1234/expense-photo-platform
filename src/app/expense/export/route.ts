@@ -10,8 +10,8 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
  * [목표]
  * 1) 항목별사용내역서_template.xlsx에 값 주입
  * 2) 사진대지 시트를 품목(item) 수만큼 복제하여 NO별 사진 삽입
- *    - 반입: inbound slot=0 (1장)
- *    - 설치: issue_install slot=0~3 (최대 4장)
+ *    - 반입: inbound 1~4장 (셀 범위 분할)
+ *    - 설치: install 1~4장 (셀 범위 분할)
  *
  * [주의]
  * - Storage 버킷명은 실제 Supabase Storage 버킷명과 반드시 동일해야 함.
@@ -21,30 +21,24 @@ import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 // ✅ 버킷명(사용자 확인 완료)
 const BUCKET = "expense-evidence";
+const BUCKET_FALLBACK = "expense-photos";
 
 // ✅ 시트명(사용자 확인 완료)
 const PHOTO_SHEET_NAME = "2.안전시설물 사진대지";
 
-// ✅ 템플릿의 사진 칸 범위(예시). 필요 시 템플릿 셀 주소로 조정
-const PHOTO_RANGES = {
-  inbound: "B6:F20",
-  install0: "H6:K12",
-  install1: "L6:O12",
-  install2: "H13:K19",
-  install3: "L13:O19",
-} as const;
 
 type PhotoRow = {
-  kind: "inbound" | "issue_install";
-  slot: number;
+  kind: "inbound" | "install";
+  slot_index: number;
   storage_path: string;
 };
 
-async function fetchImageBuffer(
+async function fetchImageBufferFromBucket(
+  bucket: string,
   storagePath: string
 ): Promise<{ buf: Buffer; ext: "png" | "jpeg" }> {
   const { data: signed, error } = await supabaseAdmin.storage
-    .from(BUCKET)
+    .from(bucket)
     .createSignedUrl(storagePath, 60 * 10);
 
   if (error) throw error;
@@ -53,7 +47,7 @@ async function fetchImageBuffer(
   if (!res.ok) throw new Error(`이미지 다운로드 실패: ${res.status}`);
 
   const arrayBuf = await res.arrayBuffer();
-  const buf = Buffer.from(arrayBuf) as any;
+  const buf = Buffer.from(arrayBuf);
 
   const lower = storagePath.toLowerCase();
   const ext: "png" | "jpeg" =
@@ -62,21 +56,58 @@ async function fetchImageBuffer(
   return { buf, ext };
 }
 
+async function fetchImageBuffer(storagePath: string): Promise<{ buf: Buffer; ext: "png" | "jpeg" }> {
+  try {
+    return await fetchImageBufferFromBucket(BUCKET, storagePath);
+  } catch {
+    return await fetchImageBufferFromBucket(BUCKET_FALLBACK, storagePath);
+  }
+}
+
 /**
  * ✅ [핵심 타입 안정화]
  * - ExcelJS 타입 정의의 Image.buffer는 Buffer(비제네릭)로 되어있는 경우가 많고,
  *   TS/Node 버전에서는 Buffer가 Buffer<T> 제네릭으로 잡히면서 타입 충돌이 납니다.
- * - 런타임은 문제 없으므로, addImage에 들어가는 buffer만 any 캐스팅으로 단일화합니다.
+ * - 런타임은 문제 없으므로, addImage에 들어가는 buffer 타입만 안정적으로 유지합니다.
  */
 function addImageToRange(
   workbook: ExcelJS.Workbook,
   worksheet: ExcelJS.Worksheet,
-  imageBuf: unknown,
+  imageBuf: Buffer,
   ext: "png" | "jpeg",
   range: string
-) {
-  const imageId = workbook.addImage({ buffer: imageBuf as any, extension: ext });
+): void {
+  const imageId = workbook.addImage({ buffer: imageBuf, extension: ext });
   worksheet.addImage(imageId, range);
+}
+
+function getInboundRanges(count: number): string[] {
+  if (count <= 1) return ["B6:E15"];
+  if (count === 2) return ["B6:C15", "D6:E15"];
+  if (count === 3) return ["B6:E10", "B11:C15", "D11:E15"];
+  return ["B6:C10", "D6:E10", "B11:C15", "D11:E15"];
+}
+
+function getInstallRanges(count: number): string[] {
+  if (count <= 1) return ["F6:I15"];
+  if (count === 2) return ["F6:G15", "H6:I15"];
+  if (count === 3) return ["F6:I10", "F11:G15", "H11:I15"];
+  return ["F6:G10", "H6:I10", "F11:G15", "H11:I15"];
+}
+
+async function applyPhotosToRanges(
+  wb: ExcelJS.Workbook,
+  ws: ExcelJS.Worksheet,
+  ranges: string[],
+  photos: PhotoRow[]
+): Promise<void> {
+  const limited = photos.slice(0, ranges.length);
+  for (let i = 0; i < limited.length; i++) {
+    const photo = limited[i];
+    const range = ranges[i];
+    const { buf, ext } = await fetchImageBuffer(photo.storage_path);
+    addImageToRange(wb, ws, buf, ext, range);
+  }
 }
 
 
@@ -228,44 +259,33 @@ export async function GET(req: Request) {
 
       const { data: photos, error: pErr } = await supabaseAdmin
         .from("expense_item_photos")
-        .select("kind, slot, storage_path")
-        .eq("expense_item_id", it.id);
+        .select("kind, slot_index, storage_path")
+        .eq("item_id", it.id)
+        .order("kind", { ascending: true })
+        .order("slot_index", { ascending: true });
 
       if (pErr) throw pErr;
 
       const list = (photos ?? []) as PhotoRow[];
+      const inboundPhotos = list.filter((p) => p.kind === "inbound");
+      const installPhotos = list.filter((p) => p.kind === "install");
 
-      const inbound = list.find((p) => p.kind === "inbound" && p.slot === 0) ?? null;
-      const install0 = list.find((p) => p.kind === "issue_install" && p.slot === 0) ?? null;
-      const install1 = list.find((p) => p.kind === "issue_install" && p.slot === 1) ?? null;
-      const install2 = list.find((p) => p.kind === "issue_install" && p.slot === 2) ?? null;
-      const install3 = list.find((p) => p.kind === "issue_install" && p.slot === 3) ?? null;
+      photoWs.views = [{ showGridLines: false }];
+      const printable = photoWs as ExcelJS.Worksheet & {
+        pageSetup: ExcelJS.PageSetup & { printGridLines?: boolean };
+      };
+      printable.pageSetup.printGridLines = false;
 
-      if (inbound) {
-        const { buf, ext } = await fetchImageBuffer(inbound.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.inbound);
-      }
-      if (install0) {
-        const { buf, ext } = await fetchImageBuffer(install0.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.install0);
-      }
-      if (install1) {
-        const { buf, ext } = await fetchImageBuffer(install1.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.install1);
-      }
-      if (install2) {
-        const { buf, ext } = await fetchImageBuffer(install2.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.install2);
-      }
-      if (install3) {
-        const { buf, ext } = await fetchImageBuffer(install3.storage_path);
-        addImageToRange(wb, photoWs, buf, ext, PHOTO_RANGES.install3);
-      }
+      const inboundRanges = getInboundRanges(Math.min(inboundPhotos.length, 4));
+      const installRanges = getInstallRanges(Math.min(installPhotos.length, 4));
+
+      await applyPhotosToRanges(wb, photoWs, inboundRanges, inboundPhotos);
+      await applyPhotosToRanges(wb, photoWs, installRanges, installPhotos);
     }
 
     // 7) 반환
     const out = await wb.xlsx.writeBuffer();
-    const body = Buffer.isBuffer(out) ? out : Buffer.from(out as any);
+    const body = Buffer.isBuffer(out) ? out : Buffer.from(out as ArrayBuffer);
     const mime =
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
