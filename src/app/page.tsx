@@ -263,8 +263,8 @@ export default function HomePage() {
   const [doc, setDoc] = useState<ExpenseDoc | null>(null);
   const [items, setItems] = useState<ExpenseItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [importWarnings, setImportWarnings] = useState<string[]>([]);
-  const [importSummary, setImportSummary] = useState<string | null>(null);
+  const [_importWarnings, setImportWarnings] = useState<string[]>([]);
+  const [_importSummary, setImportSummary] = useState<string | null>(null);
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
   const [previewSummary, setPreviewSummary] = useState<string | null>(null);
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
