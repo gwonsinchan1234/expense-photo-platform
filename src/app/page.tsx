@@ -408,7 +408,7 @@ export default function HomePage() {
       return;
     }
 
-    const insertPayload = previewRows.map(({ rowNumber: _rowNumber, ...row }) => row);
+    const insertPayload = previewRows.map(({ rowNumber: _rowNumber, source_item_name: _source, ...row }) => row);
 
     setLoading(true);
     setImportWarnings([]);
