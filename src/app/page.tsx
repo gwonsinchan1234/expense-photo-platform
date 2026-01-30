@@ -34,12 +34,14 @@ export default function HomePage() {
   const [doc, setDoc] = useState<ExpenseDoc | null>(null);
   const [items, setItems] = useState<ExpenseItem[]>([]);
   const [loading, setLoading] = useState(false);
+  /** 업로드 결과 메시지 (알림이 막혀도 화면에서 확인 가능) */
+  const [uploadMessage, setUploadMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // 문서 기본값(원하시면 UI로 입력받게 바꾸면 됩니다)
   const defaultSiteName = "현장명";
   const defaultMonthKey = "2026-01";
 
-  const loadItems = async (docId: string) => {
+  const loadItems = async (docId: string): Promise<ExpenseItem[]> => {
     const { data, error } = await supabase
       .from(ITEM_TABLE)
       .select("id, doc_id, evidence_no, item_name, qty, unit_price, amount, used_at")
@@ -48,9 +50,11 @@ export default function HomePage() {
 
     if (error) {
       alert(`품목 조회 실패: ${error.message}`);
-      return;
+      return [];
     }
-    setItems((data ?? []) as ExpenseItem[]);
+    const list = (data ?? []) as ExpenseItem[];
+    setItems(list);
+    return list;
   };
 
   const createOrLoadDoc = async () => {
@@ -132,11 +136,12 @@ export default function HomePage() {
    */
   const importExcelToItems = async (file: File) => {
     if (!doc?.id) {
-      alert("먼저 문서(doc)가 준비되어야 합니다.");
+      setUploadMessage({ type: "error", text: "먼저 '문서 불러오기/생성'을 클릭하세요." });
       return;
     }
 
     setLoading(true);
+    setUploadMessage(null);
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array" });
@@ -154,8 +159,8 @@ export default function HomePage() {
 
       // 헤더 행 찾기(상단 30행 스캔)
       const findHeaderRow = (r: any[][], scanMax = 30) => {
-        const keys = ["no", "증빙번호", "연번"];
-        const itemKeys = ["품명", "내용", "품목"];
+        const keys = ["no", "증빙번호", "연번", "번호"];
+        const itemKeys = ["품명", "내용", "품목", "품목명", "항목", "적요"];
         const qtyKeys = ["수량"];
 
         let best = { idx: -1, score: 0 };
@@ -174,7 +179,8 @@ export default function HomePage() {
 
       const headerIdx = findHeaderRow(rows);
       if (headerIdx < 0) {
-        alert("엑셀 헤더 행을 찾지 못했습니다. (NO/품명/수량 등의 헤더가 필요)");
+        setUploadMessage({ type: "error", text: "엑셀 헤더 행을 찾지 못했습니다. (NO/품명/수량 등의 헤더가 필요)" });
+        setLoading(false);
         return;
       }
 
@@ -188,14 +194,15 @@ export default function HomePage() {
       };
 
       const cNo = colIndex(["no", "증빙번호", "연번"]);
-      const cName = colIndex(["품명", "내용", "품목"]);
+      const cName = colIndex(["품명", "내용", "품목", "품목명", "항목", "적요"]);
       const cQty = colIndex(["수량"]);
       const cUnit = colIndex(["단가"]);
       const cAmt = colIndex(["금액", "사용금액", "합계"]);
       const cDate = colIndex(["일자", "사용일", "사용일자", "발행일자"]);
 
       if (cName < 0 || cQty < 0) {
-        alert("엑셀에서 '품명(내용/품목)' 또는 '수량' 컬럼을 찾지 못했습니다.");
+        setUploadMessage({ type: "error", text: "엑셀에서 '품명(내용/품목)' 또는 '수량' 컬럼을 찾지 못했습니다." });
+        setLoading(false);
         return;
       }
 
@@ -240,7 +247,11 @@ export default function HomePage() {
         .filter(Boolean) as any[];
 
       if (insertPayload.length === 0) {
-        alert("가져올 품목 데이터가 없습니다.");
+        setUploadMessage({
+          type: "error",
+          text: "가져올 품목 데이터가 없습니다. 1번 시트에 품명/수량 컬럼·헤더 다음 행에 품명이 있는지 확인하세요.",
+        });
+        setLoading(false);
         return;
       }
 
@@ -252,7 +263,11 @@ export default function HomePage() {
 
       const dupNos = noList.filter((v, i) => noList.indexOf(v) !== i);
       if (dupNos.length > 0) {
-        alert(`엑셀 내 NO(증빙번호) 중복이 있습니다: ${Array.from(new Set(dupNos)).join(", ")}\n중복 NO를 정리 후 다시 업로드하세요.`);
+        setUploadMessage({
+          type: "error",
+          text: `엑셀 내 NO(증빙번호) 중복: ${Array.from(new Set(dupNos)).join(", ")}. 중복 정리 후 다시 업로드하세요.`,
+        });
+        setLoading(false);
         return;
       }
 
@@ -260,10 +275,19 @@ export default function HomePage() {
       const { error } = await supabase.from(ITEM_TABLE).insert(insertPayload);
       if (error) throw error;
 
-      await loadItems(doc.id);
-      alert("엑셀 업로드 완료");
+      const loaded = await loadItems(doc.id);
+      if (loaded.length === 0) {
+        const text = `DB에는 ${insertPayload.length}건 저장됐으나 목록이 비어 있습니다. Supabase RLS(SELECT 권한) 확인하세요.`;
+        setUploadMessage({ type: "error", text });
+        console.warn("[엑셀 업로드]", text);
+      } else {
+        const text = `엑셀 업로드 완료 (${loaded.length}건)`;
+        setUploadMessage({ type: "success", text });
+      }
     } catch (e: any) {
-      alert(`엑셀 업로드 실패: ${e?.message ?? e}`);
+      const msg = e?.message ?? (typeof e === "string" ? e : JSON.stringify(e));
+      setUploadMessage({ type: "error", text: `엑셀 업로드 실패: ${msg}` });
+      console.error("[엑셀 업로드 실패]", e);
     } finally {
       setLoading(false);
     }
@@ -284,21 +308,45 @@ export default function HomePage() {
           품목 1개(테스트) 추가
         </button>
 
-        <label style={{ border: "1px solid #ccc", padding: "6px 10px", cursor: "pointer" }}>
+        <label
+          htmlFor="excel-upload-input"
+          style={{
+            border: "1px solid #ccc",
+            padding: "6px 10px",
+            cursor: loading ? "not-allowed" : "pointer",
+            opacity: loading ? 0.7 : 1,
+          }}
+        >
           엑셀 업로드
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) importExcelToItems(f);
-              e.currentTarget.value = "";
-            }}
-            disabled={loading || !doc?.id}
-          />
         </label>
+        <input
+          id="excel-upload-input"
+          type="file"
+          accept=".xlsx,.xls"
+          style={{ display: "none" }}
+          disabled={loading}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) importExcelToItems(f);
+            e.target.value = "";
+          }}
+        />
       </div>
+
+      {uploadMessage && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: 10,
+            borderRadius: 8,
+            background: uploadMessage.type === "error" ? "#fee" : "#efe",
+            color: uploadMessage.type === "error" ? "#c00" : "#060",
+            border: `1px solid ${uploadMessage.type === "error" ? "#fcc" : "#cfc"}`,
+          }}
+        >
+          {uploadMessage.text}
+        </div>
+      )}
 
       <div style={{ marginBottom: 12 }}>
         <div>
