@@ -91,7 +91,7 @@ export default function ItemCombobox({
 
   return (
     <div ref={wrapperRef} style={{ position: "relative", width: "100%" }}>
-      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{placeholder}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6, color: "inherit" }}>{placeholder}</div>
 
       <input
         value={open ? q : selectedItem ? renderLabel(selectedItem) : ""}
@@ -108,8 +108,10 @@ export default function ItemCombobox({
           width: "100%",
           padding: "10px 12px",
           borderRadius: 10,
-          border: "2px solid #f59e0b", // ✅ 눈에 띄게: 지금 컴포넌트 맞는지 확인용
+          border: "2px solid #f59e0b",
           outline: "none",
+          background: "#fff",
+          color: "#171717",
         }}
       />
 

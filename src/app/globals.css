@@ -24,3 +24,28 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* 다크모드에서도 input/select/textarea 글씨 항상 보이게 */
+input,
+select,
+textarea {
+  color: #171717 !important;
+  background-color: #ffffff !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #666 !important;
+}
+
+/* select option도 배경 밝을 때 글씨 보이게 */
+select option {
+  color: #171717;
+  background-color: #ffffff;
+}
+
+/* 버튼: 기본은 밝은 배경+진한 글씨 */
+button {
+  color: #171717;
+  background-color: #ffffff;
+}

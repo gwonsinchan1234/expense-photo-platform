@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 type Kind = "inbound" | "install";
-type SlotKey = "inbound" | "install0" | "install1" | "install2" | "install3";
+type SlotKey = "inbound0" | "inbound1" | "inbound2" | "inbound3" | "install0" | "install1" | "install2" | "install3";
 
 type SlotState = {
   file: File | null;
@@ -21,7 +21,10 @@ type ApiRow = {
 };
 
 const empty = (): Record<SlotKey, SlotState> => ({
-  inbound: { file: null, url: null, name: null, uploading: false },
+  inbound0: { file: null, url: null, name: null, uploading: false },
+  inbound1: { file: null, url: null, name: null, uploading: false },
+  inbound2: { file: null, url: null, name: null, uploading: false },
+  inbound3: { file: null, url: null, name: null, uploading: false },
   install0: { file: null, url: null, name: null, uploading: false },
   install1: { file: null, url: null, name: null, uploading: false },
   install2: { file: null, url: null, name: null, uploading: false },
@@ -29,15 +32,19 @@ const empty = (): Record<SlotKey, SlotState> => ({
 });
 
 function mapKey(k: SlotKey): { kind: Kind; slotIndex: number } {
-  if (k === "inbound") return { kind: "inbound", slotIndex: 0 };
+  if (k.startsWith("inbound")) return { kind: "inbound", slotIndex: Number(k.replace("inbound", "")) };
   return { kind: "install", slotIndex: Number(k.replace("install", "")) };
 }
 
 function keyFromRow(kind: Kind, slotIndex: number): SlotKey | null {
-  if (kind === "inbound") return slotIndex === 0 ? "inbound" : null;
+  const idx = typeof slotIndex === "number" ? slotIndex : Number(slotIndex);
+  if (kind === "inbound") {
+    if (idx < 0 || idx > 3) return null;
+    return `inbound${idx}` as SlotKey;
+  }
   if (kind === "install") {
-    if (slotIndex < 0 || slotIndex > 3) return null;
-    return `install${slotIndex}` as SlotKey;
+    if (idx < 0 || idx > 3) return null;
+    return `install${idx}` as SlotKey;
   }
   return null;
 }
@@ -48,7 +55,10 @@ function isBlobUrl(url: string | null) {
 
 export default function PhotoSection({ docId, itemId }: { docId: string; itemId: string }) {
   const [slots, setSlots] = useState<Record<SlotKey, SlotState>>(empty());
-  const allKeys: SlotKey[] = useMemo(() => ["inbound", "install0", "install1", "install2", "install3"], []);
+  const allKeys: SlotKey[] = useMemo(
+    () => ["inbound0", "inbound1", "inbound2", "inbound3", "install0", "install1", "install2", "install3"],
+    []
+  );
 
   // 언마운트 정리(1회)
   const slotsRef = useRef(slots);
@@ -81,7 +91,7 @@ export default function PhotoSection({ docId, itemId }: { docId: string; itemId:
       if (!docId || !itemId) return;
 
       try {
-        const res = await fetch(`/api/photos?docId=${docId}&itemId=${itemId}`);
+        const res = await fetch(`/api/photos/upload?docId=${docId}&itemId=${itemId}`);
         const json = await res.json().catch(() => null);
         if (!res.ok || !json?.ok) throw new Error(json?.message || "기존 사진 조회 실패");
 
@@ -184,7 +194,7 @@ export default function PhotoSection({ docId, itemId }: { docId: string; itemId:
   };
 
   const Slot = ({ title, k }: { title: string; k: SlotKey }) => {
-    const s = slots[k];
+    const s = slots[k] ?? { file: null, url: null, name: null, uploading: false };
     const hasFile = !!s.file;
 
     return (
@@ -209,7 +219,17 @@ export default function PhotoSection({ docId, itemId }: { docId: string; itemId:
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, padding: 10 }}>
-          <label style={{ border: "1px solid #444", borderRadius: 12, padding: 10, textAlign: "center", cursor: "pointer" }}>
+          <label
+            style={{
+              border: "1px solid #444",
+              borderRadius: 12,
+              padding: 10,
+              textAlign: "center",
+              cursor: "pointer",
+              color: "#fff",
+              background: "transparent",
+            }}
+          >
             {hasFile ? "교체" : "선택"}
             <input type="file" accept="image/*" onChange={onPick(k)} style={{ display: "none" }} />
           </label>
@@ -238,8 +258,8 @@ export default function PhotoSection({ docId, itemId }: { docId: string; itemId:
   return (
     <section style={{ display: "grid", gap: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
-        <div style={{ fontWeight: 800, color: "#fff" }}>사진 업로드</div>
-        <div style={{ fontSize: 12, opacity: 0.75, wordBreak: "break-all", color: "#fff" }}>
+        <div style={{ fontWeight: 800, color: "inherit" }}>사진 업로드</div>
+        <div style={{ fontSize: 12, opacity: 0.85, wordBreak: "break-all", color: "inherit" }}>
           docId: {docId} / itemId: {itemId}
         </div>
       </div>
@@ -248,16 +268,29 @@ export default function PhotoSection({ docId, itemId }: { docId: string; itemId:
         <button
           type="button"
           onClick={uploadAllSelected}
-          style={{ border: "1px solid #444", borderRadius: 12, padding: "10px 12px", background: "transparent", color: "#fff", cursor: "pointer" }}
+          style={{
+            border: "1px solid #555",
+            borderRadius: 12,
+            padding: "10px 12px",
+            background: "#333",
+            color: "#fff",
+            cursor: "pointer",
+            fontWeight: 500,
+          }}
         >
           선택된 사진 전체 업로드
         </button>
       </div>
 
-      <div style={{ marginTop: 6, marginBottom: 2, fontWeight: 800, fontSize: 13, color: "#fff" }}>반입 사진 (1장)</div>
-      <Slot title="반입 (slotIndex=0 고정)" k="inbound" />
+      <div style={{ marginTop: 6, marginBottom: 2, fontWeight: 800, fontSize: 13, color: "inherit" }}>반입 사진 (최대 4장)</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <Slot title="반입 slot 0" k="inbound0" />
+        <Slot title="반입 slot 1" k="inbound1" />
+        <Slot title="반입 slot 2" k="inbound2" />
+        <Slot title="반입 slot 3" k="inbound3" />
+      </div>
 
-      <div style={{ marginTop: 10, marginBottom: 2, fontWeight: 800, fontSize: 13, color: "#fff" }}>지급·설치 사진 (최대 4장)</div>
+      <div style={{ marginTop: 10, marginBottom: 2, fontWeight: 800, fontSize: 13, color: "inherit" }}>지급·설치 사진 (최대 4장)</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <Slot title="지급·설치 slot 0" k="install0" />
         <Slot title="지급·설치 slot 1" k="install1" />

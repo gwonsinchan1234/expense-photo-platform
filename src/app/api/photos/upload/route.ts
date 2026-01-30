@@ -98,12 +98,8 @@ export async function POST(req: NextRequest) {
 
     if (!(file instanceof File)) return bad("file 누락");
 
-    // ✅ 슬롯 규칙(서버 강제)
-    if (kind === "inbound") {
-      if (slotIndex !== 0) return bad("반입(inbound)은 slotIndex=0만 허용");
-    } else {
-      if (slotIndex < 0 || slotIndex > 3) return bad("지급·설치(install)은 slotIndex 0~3만 허용");
-    }
+    // ✅ 슬롯 규칙(서버 강제) - 반입·지급·설치 모두 0~3
+    if (slotIndex < 0 || slotIndex > 3) return bad("slotIndex는 0~3만 허용");
 
     const arrayBuf = await file.arrayBuffer();
     if (arrayBuf.byteLength > MAX_BYTES) return bad(`파일 용량 초과(최대 ${MAX_BYTES} bytes)`);
